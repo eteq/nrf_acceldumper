@@ -39,6 +39,10 @@ use apa102_spi::Apa102;
 const RTC_PRESCALAR : u32 = 64;
 const RTC_FREQ : u32 = 512;
 
+const MPU6050_ADDR1 : u8 = 0x68;
+const MPU6050_ADDR2 : u8 = 0x69;
+const BNO055_ADDR : u8 = 0x28;
+
 #[entry]
 fn main() -> ! {
     let panic_msg = panic_persist::get_panic_message_bytes();  // None means no panic last round
@@ -125,16 +129,17 @@ fn main() -> ! {
     }
        
     // set up the mpu6050 accelerometers.  Note theres a few hundred ms delays for various things here
-    mpu6050::mpu6050_setup(&mut i2c, &mut delay, 0x68).expect("mpu6050_setup failed for addr 0x68");
-    mpu6050::mpu6050_setup(&mut i2c, &mut delay, 0x69).expect("mpu6050_setup failed for addr 0x68");
-
-    //  BNO055   0x28
+    mpu6050::mpu6050_setup(&mut i2c, &mut delay, MPU6050_ADDR1).expect("mpu6050_setup failed for addr 0x68");
+    mpu6050::mpu6050_setup(&mut i2c, &mut delay, MPU6050_ADDR2).expect("mpu6050_setup failed for addr 0x68");
 
     // startup completed
     dotstar.write([RGB{r:0, g:0, b:0}].into_iter()).expect("dotstar write failed");
 
     let mut counts = 0;
     let mut next_rtc = rtc.get_counter() + RTC_FREQ;
+    
+    mpu6050::mpu6050_reset_fifo(&mut i2c, MPU6050_ADDR1).expect("mpu6050_reset_fifo failed for addr 0x68");
+    mpu6050::mpu6050_reset_fifo(&mut i2c, MPU6050_ADDR2).expect("mpu6050_reset_fifo failed for addr 0x69");
     // main loop
     loop {
         if !usb_dev.poll(&mut [&mut serial]) {
@@ -144,8 +149,11 @@ fn main() -> ! {
         // all is well, proceed as normal
         if rtc.get_counter() >= next_rtc {
 
+            let q1 = mpu6050::mpu6050_read_fifo(&mut i2c, MPU6050_ADDR1).unwrap().q_to_float();
+            let q2 = mpu6050::mpu6050_read_fifo(&mut i2c, MPU6050_ADDR2).unwrap().q_to_float();
+
             scratch_string.clear();
-            write!(scratch_string, "Hello world! {} {}\r\n", counts, rtc.get_counter()).expect("write! failed");
+            write!(scratch_string, "Hello {counts}! {q1:?} {q2:?}\r\n").expect("write! failed");
             serial.write(scratch_string.as_bytes()).expect("Failed to write to serial usb");
 
             match counts % 3 {
