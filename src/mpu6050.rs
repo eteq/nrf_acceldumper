@@ -6,53 +6,58 @@ mod dmp_firmware;
 
 use micromath::F32Ext;
 
-use feather_m4 as bsp;
-use bsp::hal;
+use nrf52840_hal as hal;
 
 use hal::prelude::*;
 use hal::delay::Delay;
-use hal::sercom::i2c;
+use hal::twim::Error;
+use embedded_hal::blocking::i2c::{Write, WriteRead};
 
 pub(crate) use dmp_firmware::DMP_PACKET_SIZE;
 
 const ACCEL_SCALE : f32 = 2.0;
 
 
-pub(crate) fn mpu6050_setup<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, delay: &mut Delay, address: u8) {
+pub(crate) fn mpu6050_setup<T: Write + WriteRead>(i2c: &mut T, delay: &mut Delay, address: u8) -> Result<(), Error>  
+    where hal::twim::Error: From<<T as Write>::Error>,
+          hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut reg_buffer = [0; 1];
-    i2c.write_read(address, &[0x75], &mut reg_buffer).unwrap();
+    i2c.write_read(address, &[0x75], &mut reg_buffer)?;
     if reg_buffer[0] != 0x68 { panic!("no/invalid response from MPU6050! {}", reg_buffer[0]); }
 
     // device reset
-    i2c.write(address, &[107, 0b10000000]).unwrap();
+    i2c.write(address, &[107, 0b10000000])?;
     delay.delay_ms(100u32);
     // singal path reset - not clear if this is necessary but maybe recommended in register map doc?
-    i2c.write(address, &[104, 0b00000111]).unwrap();
+    i2c.write(address, &[104, 0b00000111])?;
     delay.delay_ms(100u32);
 
-    i2c.write(address, &[56,  0b00000000]).unwrap(); // no interrupts
-    i2c.write(address, &[35,  0b00000000]).unwrap(); // Turn off regular FIFO to use DMP FIFO instead
-    i2c.write(address, &[28,  0b00000000]).unwrap(); // 2g full scale accelerometer
+    i2c.write(address, &[56,  0b00000000])?; // no interrupts
+    i2c.write(address, &[35,  0b00000000])?; // Turn off regular FIFO to use DMP FIFO instead
+    i2c.write(address, &[28,  0b00000000])?; // 2g full scale accelerometer
     assert!(ACCEL_SCALE == 2.0);
-    i2c.write(address, &[55,  0b10010000]).unwrap(); //logic level for int pin low, and clear int status on any read MAY NOT BE NEEDED?
-    i2c.write(address, &[107, 0b00000001]).unwrap(); // Clock to PLL with X axis gyroscope reference, dont sleep
-    i2c.write(address, &[26,  0b00000001]).unwrap(); // no external synchronization, set the DLPF to 184/188 Hz bandwidth
-    i2c.write(address, &[25,  0b00000100]).unwrap(); // divides the sample rate - yields 200hz I think combined with above?
+    i2c.write(address, &[55,  0b10010000])?; //logic level for int pin low, and clear int status on any read MAY NOT BE NEEDED?
+    i2c.write(address, &[107, 0b00000001])?; // Clock to PLL with X axis gyroscope reference, dont sleep
+    i2c.write(address, &[26,  0b00000001])?; // no external synchronization, set the DLPF to 184/188 Hz bandwidth
+    i2c.write(address, &[25,  0b00000100])?; // divides the sample rate - yields 200hz I think combined with above?
 	
-    mpu6050_write_firmware(i2c, address, true);
+    mpu6050_write_firmware(i2c, address, true)?;
     // set DMP Program Start Address 0x0400
-    i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_DMP_PROG_START, 0x04, 0x00]).unwrap(); 
+    i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_DMP_PROG_START, 0x04, 0x00])?; 
     
    
-    i2c.write(address, &[27,  0b00011000]).unwrap(); // set gyro to +2000 Deg/sec full range
-    i2c.write(address, &[106, 0b11001100]).unwrap(); // turn on the fifo and reset it, and also turn on and reset the DMP (bits 7,3, respectively)
-    i2c.write(address, &[56,  0b00000010]).unwrap(); // now turn on the RAW_DMP_INT_EN since the DMP is now set up
+    i2c.write(address, &[27,  0b00011000])?; // set gyro to +2000 Deg/sec full range
+    i2c.write(address, &[106, 0b11001100])?; // turn on the fifo and reset it, and also turn on and reset the DMP (bits 7,3, respectively)
+    i2c.write(address, &[56,  0b00000010])?; // now turn on the RAW_DMP_INT_EN since the DMP is now set up
   
-    i2c.write_read(address, &[0x75], &mut reg_buffer).unwrap();
+    i2c.write_read(address, &[0x75], &mut reg_buffer)?;
     if reg_buffer[0] != 0x68 { panic!("no/invalid response from MPU6050 after reset/setup! {}", reg_buffer[0]); }
+    Ok(())
 }
 
-pub(crate) fn mpu6050_write_firmware<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, address: u8, verify: bool) {
+pub(crate) fn mpu6050_write_firmware<T: Write + WriteRead>(i2c: &mut T, address: u8, verify: bool) -> Result<(), Error>  
+where hal::twim::Error: From<<T as Write>::Error>,
+      hal::twim::Error: From<<T as WriteRead>::Error> {
     let nbanks = dmp_firmware::DMP_FIRMWARE.len() / dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE + 
         if dmp_firmware::DMP_FIRMWARE.len() % dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE == 0 {0} else {1};
 
@@ -65,7 +70,7 @@ pub(crate) fn mpu6050_write_firmware<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, a
         };
 
         // set the bank
-        i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_BANK_SEL, b as u8]).unwrap();
+        i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_BANK_SEL, b as u8])?;
 
         // now write the bank one chunk at a time
         for i in (0..bank_size).step_by(dmp_firmware::MPU6050_DMP_MEMORY_CHUNK_SIZE) {
@@ -79,8 +84,8 @@ pub(crate) fn mpu6050_write_firmware<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, a
                 write_buffer[j + 1] = dmp_firmware::DMP_FIRMWARE[i + j + b*dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE];
             }
             // set the start address then write
-            i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_MEM_START_ADDR, i as u8]).unwrap();
-            i2c.write(address, &write_buffer[0..(chunk_size+1)]).unwrap();
+            i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_MEM_START_ADDR, i as u8])?;
+            i2c.write(address, &write_buffer[0..(chunk_size+1)])?;
         }
 
     }
@@ -93,12 +98,12 @@ pub(crate) fn mpu6050_write_firmware<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, a
             let bank = (i / dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE) as u8;
             if bank != last_bank {
                 //set to new bank 
-                i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_BANK_SEL, bank]).unwrap();
+                i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_BANK_SEL, bank])?;
             }
 
-            i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_MEM_START_ADDR, (i % dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE) as u8]).unwrap();
+            i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_MEM_START_ADDR, (i % dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE) as u8])?;
             i2c.write_read(address, &[dmp_firmware::MPU6050_REGADDR_MEM_R_W],  
-                                    &mut verify_buffer).unwrap();
+                                    &mut verify_buffer)?;
 
             for j in 0..verify_buffer.len() {
                 if (i+j) < dmp_firmware::DMP_FIRMWARE.len() {
@@ -111,66 +116,43 @@ pub(crate) fn mpu6050_write_firmware<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, a
             last_bank = bank;
         }
     }
+    Ok(())
 }
 
-pub(crate) fn mpu6050_reset_fifo<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, address: u8) {
+pub(crate) fn mpu6050_reset_fifo<T: Write + WriteRead>(i2c: &mut T, address: u8) -> Result<(), Error>  
+where hal::twim::Error: From<<T as Write>::Error>,
+      hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut reg_buffer = [0; 1];
     // first read the USER_CTRL register
-    i2c.write_read(address, &[106], &mut reg_buffer).unwrap();
-    i2c.write(address, &[106, reg_buffer[0] | 0b00000100]).unwrap();  // write back the same thing but with the fifo reset bit set
+    i2c.write_read(address, &[106], &mut reg_buffer)?;
+    i2c.write(address, &[106, reg_buffer[0] | 0b00000100])?;  // write back the same thing but with the fifo reset bit set
+    Ok(())
 }
 
-pub(crate) fn mpu6050_get_fifo_count<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, address: u8) -> u16 {
+pub(crate) fn mpu6050_get_fifo_count<T: WriteRead>(i2c: &mut T, address: u8) -> Result<u16, Error>  
+where hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut rd_buffer = [0; 2];
     // first read the USER_CTRL register
-    i2c.write_read(address, &[114], &mut rd_buffer).unwrap();
-    ((rd_buffer[0] as u16) << 8) | (rd_buffer[1] as u16)
+    i2c.write_read(address, &[114], &mut rd_buffer)?;
+    Ok(((rd_buffer[0] as u16) << 8) | (rd_buffer[1] as u16))
 }
-
-// entirely for testing that it actually produces a good fifo output
-pub(crate) fn mpu6050_test_panic<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, address: u8, basic_fifo: bool) {
-    
-    if basic_fifo {
-        i2c.write(address, &[35,  0b01111000]).unwrap(); //regular fifo on for accel/gyro
-    }
-
-    mpu6050_reset_fifo(i2c, address);
-    let mut count = 0;
-    let mut nzeros: usize = 0;
-    while count == 0 {
-        let mut rd_buffer = [0; 2];
-        // first read the USER_CTRL register
-        i2c.write_read(address, &[114], &mut rd_buffer).unwrap();
-        count = ((rd_buffer[0] as u16) << 8) | (rd_buffer[1] as u16);
-        //panic!("in 0 count");
-        nzeros += 1;
-    }
-
-    if count >= 5 {
-        let mut fifo = [0; 5];
-        i2c.write_read(address, &[116], &mut fifo).unwrap();
-        panic!("reached non-zero count {}, after {} zeros. First 5: {},{},{},{},{}", count, nzeros, fifo[0], fifo[1], fifo[2], fifo[3], fifo[4]);
-    } else {
-        panic!("reached non-zero count {}, after {} zeros", count, nzeros);
-
-    }
-}
-
 
 // For unclear reasons there are an additional 2 bytes that need reading even though the packet is supposet to be opnly 28 bytes
-pub(crate) fn mpu6050_read_fifo_raw<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, address: u8) -> [u8; dmp_firmware::DMP_PACKET_SIZE+2] {
-    let mut count = mpu6050_get_fifo_count(i2c, address);
+pub(crate) fn mpu6050_read_fifo_raw<T: WriteRead>(i2c: &mut T, address: u8) -> Result<[u8; dmp_firmware::DMP_PACKET_SIZE+2], Error>  
+where hal::twim::Error: From<<T as WriteRead>::Error> {
+    let mut count = mpu6050_get_fifo_count(i2c, address)?;
     while count < 28 {
-        count = mpu6050_get_fifo_count(i2c, address);
+        count = mpu6050_get_fifo_count(i2c, address)?;
     }
     let mut fifo = [0; dmp_firmware::DMP_PACKET_SIZE+2];
-    i2c.write_read(address, &[116], &mut fifo).unwrap();
-    fifo
+    i2c.write_read(address, &[116], &mut fifo)?;
+    Ok(fifo)
 }
 
 
-pub(crate) fn mpu6050_read_fifo<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, address: u8) -> MAPPData {
-    let fifo_raw = mpu6050_read_fifo_raw(i2c, address);
+pub(crate) fn mpu6050_read_fifo<T: Write + WriteRead>(i2c: &mut T, address: u8) -> Result<MAPPData, Error>  
+where hal::twim::Error: From<<T as WriteRead>::Error> {
+    let fifo_raw = mpu6050_read_fifo_raw(i2c, address)?;
 
     let qw = ((fifo_raw[0] as i16) << 8) | fifo_raw[1] as i16;
     let qx = ((fifo_raw[4] as i16) << 8) | fifo_raw[5] as i16;
@@ -185,7 +167,7 @@ pub(crate) fn mpu6050_read_fifo<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, addres
     let ay = ((fifo_raw[24] as i16) << 8) | fifo_raw[25] as i16;
     let az = ((fifo_raw[26] as i16) << 8) | fifo_raw[27] as i16;
 
-    MAPPData {
+    Ok(MAPPData {
         qw: qw,
         qx: qx,
         qy: qy,
@@ -196,7 +178,7 @@ pub(crate) fn mpu6050_read_fifo<T: i2c::AnyConfig>(i2c: &mut i2c::I2c<T>, addres
         accel_x: ax,
         accel_y: ay,
         accel_z: az,
-    }
+    })
 }
 
 pub(crate) struct MAPPData {
