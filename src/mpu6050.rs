@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 #![allow(dead_code)]
 
 
@@ -13,12 +12,13 @@ use hal::delay::Delay;
 use hal::twim::Error;
 use embedded_hal::blocking::i2c::{Write, WriteRead};
 
+#[allow(unused_imports)]
 pub(crate) use dmp_firmware::DMP_PACKET_SIZE;
 
 const ACCEL_SCALE : f32 = 2.0;
 
 
-pub(crate) fn mpu6050_setup<T: Write + WriteRead>(i2c: &mut T, delay: &mut Delay, address: u8) -> Result<(), Error>  
+pub(crate) fn setup<T: Write + WriteRead>(i2c: &mut T, delay: &mut Delay, address: u8) -> Result<(), Error>  
     where hal::twim::Error: From<<T as Write>::Error>,
           hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut reg_buffer = [0; 1];
@@ -41,7 +41,7 @@ pub(crate) fn mpu6050_setup<T: Write + WriteRead>(i2c: &mut T, delay: &mut Delay
     i2c.write(address, &[26,  0b00000001])?; // no external synchronization, set the DLPF to 184/188 Hz bandwidth
     i2c.write(address, &[25,  0b00000100])?; // divides the sample rate - yields 200hz I think combined with above?
 	
-    mpu6050_write_firmware(i2c, address, true)?;
+    write_firmware(i2c, address, true)?;
     // set DMP Program Start Address 0x0400
     i2c.write(address, &[dmp_firmware::MPU6050_REGADDR_DMP_PROG_START, 0x04, 0x00])?; 
     
@@ -55,7 +55,7 @@ pub(crate) fn mpu6050_setup<T: Write + WriteRead>(i2c: &mut T, delay: &mut Delay
     Ok(())
 }
 
-pub(crate) fn mpu6050_write_firmware<T: Write + WriteRead>(i2c: &mut T, address: u8, verify: bool) -> Result<(), Error>  
+pub(crate) fn write_firmware<T: Write + WriteRead>(i2c: &mut T, address: u8, verify: bool) -> Result<(), Error>  
 where hal::twim::Error: From<<T as Write>::Error>,
       hal::twim::Error: From<<T as WriteRead>::Error> {
     let nbanks = dmp_firmware::DMP_FIRMWARE.len() / dmp_firmware::MPU6050_DMP_MEMORY_BANK_SIZE + 
@@ -119,7 +119,7 @@ where hal::twim::Error: From<<T as Write>::Error>,
     Ok(())
 }
 
-pub(crate) fn mpu6050_reset_fifo<T: Write + WriteRead>(i2c: &mut T, address: u8) -> Result<(), Error>  
+pub(crate) fn reset_fifo<T: Write + WriteRead>(i2c: &mut T, address: u8) -> Result<(), Error>  
 where hal::twim::Error: From<<T as Write>::Error>,
       hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut reg_buffer = [0; 1];
@@ -129,7 +129,7 @@ where hal::twim::Error: From<<T as Write>::Error>,
     Ok(())
 }
 
-pub(crate) fn mpu6050_get_fifo_count<T: WriteRead>(i2c: &mut T, address: u8) -> Result<u16, Error>  
+pub(crate) fn get_fifo_count<T: WriteRead>(i2c: &mut T, address: u8) -> Result<u16, Error>  
 where hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut rd_buffer = [0; 2];
     // first read the USER_CTRL register
@@ -138,11 +138,11 @@ where hal::twim::Error: From<<T as WriteRead>::Error> {
 }
 
 // For unclear reasons there are an additional 2 bytes that need reading even though the packet is supposet to be opnly 28 bytes
-pub(crate) fn mpu6050_read_fifo_raw<T: WriteRead>(i2c: &mut T, address: u8) -> Result<[u8; dmp_firmware::DMP_PACKET_SIZE+2], Error>  
+pub(crate) fn read_fifo_raw<T: WriteRead>(i2c: &mut T, address: u8) -> Result<[u8; dmp_firmware::DMP_PACKET_SIZE+2], Error>  
 where hal::twim::Error: From<<T as WriteRead>::Error> {
-    let mut count = mpu6050_get_fifo_count(i2c, address)?;
+    let mut count = get_fifo_count(i2c, address)?;
     while count < 28 {
-        count = mpu6050_get_fifo_count(i2c, address)?;
+        count = get_fifo_count(i2c, address)?;
     }
     let mut fifo = [0; dmp_firmware::DMP_PACKET_SIZE+2];
     i2c.write_read(address, &[116], &mut fifo)?;
@@ -150,9 +150,9 @@ where hal::twim::Error: From<<T as WriteRead>::Error> {
 }
 
 
-pub(crate) fn mpu6050_read_fifo<T: Write + WriteRead>(i2c: &mut T, address: u8) -> Result<MAPPData, Error>  
+pub(crate) fn read_fifo<T: Write + WriteRead>(i2c: &mut T, address: u8) -> Result<MAPPData, Error>  
 where hal::twim::Error: From<<T as WriteRead>::Error> {
-    let fifo_raw = mpu6050_read_fifo_raw(i2c, address)?;
+    let fifo_raw = read_fifo_raw(i2c, address)?;
 
     let qw = ((fifo_raw[0] as i16) << 8) | fifo_raw[1] as i16;
     let qx = ((fifo_raw[4] as i16) << 8) | fifo_raw[5] as i16;

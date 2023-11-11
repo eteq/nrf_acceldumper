@@ -4,6 +4,7 @@
 use panic_persist;
 
 mod mpu6050;
+mod bno055;
 
 use cortex_m_rt::entry;
 
@@ -81,7 +82,7 @@ fn main() -> ! {
     let sda = port0.p0_16.into_floating_input().degrade();
     let mut i2c = twim::Twim::new(periph.TWIM0, 
                               twim::Pins { scl, sda }, 
-                              twim::Frequency::K100);
+                              twim::Frequency::K400);
     
 
     // set up usb serial
@@ -96,7 +97,7 @@ fn main() -> ! {
         .max_packet_size_0(64) // (makes control transfers 8x faster)
         .build();
 
-    let mut scratch_string: heapless::String<256> = heapless::String::new();
+    let mut scratch_string: heapless::String<2560> = heapless::String::new();
 
     // For some reason this is long enough that it sits and waits for input on the computer side, which is the desired behavior...
     let rtc_end = rtc.get_counter() + RTC_FREQ*3; // 3 sec
@@ -129,8 +130,10 @@ fn main() -> ! {
     }
        
     // set up the mpu6050 accelerometers.  Note theres a few hundred ms delays for various things here
-    mpu6050::mpu6050_setup(&mut i2c, &mut delay, MPU6050_ADDR1).expect("mpu6050_setup failed for addr 0x68");
-    mpu6050::mpu6050_setup(&mut i2c, &mut delay, MPU6050_ADDR2).expect("mpu6050_setup failed for addr 0x68");
+    mpu6050::setup(&mut i2c, &mut delay, MPU6050_ADDR1).expect("mpu6050 setup failed for addr 0x68");
+    mpu6050::setup(&mut i2c, &mut delay, MPU6050_ADDR2).expect("mpu6050 setup failed for addr 0x68");
+
+    bno055::setup(&mut i2c, &mut delay, BNO055_ADDR).expect("bno055 setup failed");
 
     // startup completed
     dotstar.write([RGB{r:0, g:0, b:0}].into_iter()).expect("dotstar write failed");
@@ -138,22 +141,33 @@ fn main() -> ! {
     let mut counts = 0;
     let mut next_rtc = rtc.get_counter() + RTC_FREQ;
     
-    mpu6050::mpu6050_reset_fifo(&mut i2c, MPU6050_ADDR1).expect("mpu6050_reset_fifo failed for addr 0x68");
-    mpu6050::mpu6050_reset_fifo(&mut i2c, MPU6050_ADDR2).expect("mpu6050_reset_fifo failed for addr 0x69");
+    mpu6050::reset_fifo(&mut i2c, MPU6050_ADDR1).expect("mpu6050 reset_fifo failed for addr 0x68");
+    mpu6050::reset_fifo(&mut i2c, MPU6050_ADDR2).expect("mpu6050 reset_fifo failed for addr 0x69");
+    // clear BNO055 by reading interrupt
+
     // main loop
     loop {
         if !usb_dev.poll(&mut [&mut serial]) {
             continue;
         }
+
+        // core algorithm to replace below: look for both FIFOs >= 30 and interrupt set for BNo055 - read all 3 in that case, store time.  Print it out.  Watch for FIFO overflow ()>60) and reset if it occurred
     
         // all is well, proceed as normal
         if rtc.get_counter() >= next_rtc {
 
-            let q1 = mpu6050::mpu6050_read_fifo(&mut i2c, MPU6050_ADDR1).unwrap().q_to_float();
-            let q2 = mpu6050::mpu6050_read_fifo(&mut i2c, MPU6050_ADDR2).unwrap().q_to_float();
+            let q1 = mpu6050::read_fifo(&mut i2c, MPU6050_ADDR1).unwrap().q_to_float();
+            let q2 = mpu6050::read_fifo(&mut i2c, MPU6050_ADDR2).unwrap().q_to_float();
+
+            let calib = bno055::read_calib_status(&mut i2c, BNO055_ADDR).unwrap();
+            let b = bno055::read_data(&mut i2c, BNO055_ADDR).unwrap();
 
             scratch_string.clear();
-            write!(scratch_string, "Hello {counts}! {q1:?} {q2:?}\r\n").expect("write! failed");
+            write!(scratch_string, "qs {counts}: {q1:?} {q2:?}\r\n").expect("write! failed");
+            serial.write(scratch_string.as_bytes()).expect("Failed to write to serial usb");
+
+            scratch_string.clear();
+            write!(scratch_string, "b {counts}: {calib:#08b} {} {}\r\n", b.liax, b.qw).expect("write! failed");
             serial.write(scratch_string.as_bytes()).expect("Failed to write to serial usb");
 
             match counts % 3 {
@@ -164,9 +178,6 @@ fn main() -> ! {
             }
 
             counts += 1;
-            if counts > 10 {
-                panic!("too many counts");
-            }
             next_rtc += RTC_FREQ;
         }
     }
