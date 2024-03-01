@@ -4,3 +4,5 @@ __pycache__
 *.csv
 *.dat
 .ipynb_checkpoints
+app/dist
+app/dump*
