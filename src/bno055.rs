@@ -140,22 +140,62 @@ pub(crate) fn read_data<T: WriteRead>(i2c: &mut T, address: u8) -> Result<BNO055
     let liay = ((buf[11] as i16) << 8) | buf[10] as i16;
     let liaz = ((buf[13] as i16) << 8) | buf[12] as i16;
 
-    // BNO005 datasheet says quaternions are scaled to 2**14 signed
     let data = BNO055Data {
-        liax: liax as f32 / 1000.,
-        liay: liay as f32 / 1000.,
-        liaz: liaz as f32 / 1000.,
-        qw: qw as f32 / 16384.,
-        qx: qx as f32 / 16384.,
-        qy: qy as f32 / 16384.,
-        qz: qz as f32 / 16384.,
+        liax: liax,
+        liay: liay,
+        liaz: liaz,
+        qw: qw,
+        qx: qx,
+        qy: qy,
+        qz: qz,
     };
     Ok(data)
 }
 
-// accel in g, quaternions is normalized quaternion units
+// in raw units - accel is mg, quaternions are 2**14 signed
 #[derive(Debug)]
 pub(crate) struct BNO055Data {
+    pub liax: i16,
+    pub liay: i16,
+    pub liaz: i16,
+    pub qw: i16,
+    pub qx: i16,
+    pub qy: i16,
+    pub qz: i16,
+}
+
+impl BNO055Data {
+    pub(crate) fn to_float(&self) -> BNO055DataF {
+        BNO055DataF {
+            liax: self.liax as f32 / 1000.,
+            liay: self.liay as f32 / 1000.,
+            liaz: self.liaz as f32 / 1000.,
+            qw: self.qw as f32 / 16384.,
+            qx: self.qx as f32 / 16384.,
+            qy: self.qy as f32 / 16384.,
+            qz: self.qz as f32 / 16384.,
+        }
+    }
+
+    pub(crate) fn to_bytes(&self) -> [u8; 14] {
+        let mut buf = [0u8; 14];
+
+        buf[0..2].clone_from_slice(&self.qw.to_le_bytes());
+        buf[2..4].clone_from_slice(&self.qx.to_le_bytes());
+        buf[4..6].clone_from_slice(&self.qy.to_le_bytes());
+        buf[6..8].clone_from_slice(&self.qz.to_le_bytes());
+        buf[8..10].clone_from_slice(&self.liax.to_le_bytes());
+        buf[10..12].clone_from_slice(&self.liay.to_le_bytes());
+        buf[12..14].clone_from_slice(&self.liaz.to_le_bytes());
+
+        buf
+    }
+}
+
+
+// accel in g, quaternions is normalized quaternion units
+#[derive(Debug)]
+pub(crate) struct BNO055DataF {
     pub liax: f32,
     pub liay: f32,
     pub liaz: f32,

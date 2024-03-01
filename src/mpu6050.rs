@@ -138,13 +138,15 @@ where hal::twim::Error: From<<T as WriteRead>::Error> {
 }
 
 // For unclear reasons there are an additional 2 bytes that need reading even though the packet is supposet to be opnly 28 bytes
-pub(crate) fn read_fifo_raw<T: WriteRead>(i2c: &mut T, address: u8) -> Result<[u8; dmp_firmware::DMP_PACKET_SIZE+2], Error>  
+pub(crate) const FIFO_SIZE: usize = dmp_firmware::DMP_PACKET_SIZE + 2;
+
+pub(crate) fn read_fifo_raw<T: WriteRead>(i2c: &mut T, address: u8) -> Result<[u8; FIFO_SIZE], Error>  
 where hal::twim::Error: From<<T as WriteRead>::Error> {
     let mut count = get_fifo_count(i2c, address)?;
     while count < 28 {
         count = get_fifo_count(i2c, address)?;
     }
-    let mut fifo = [0; dmp_firmware::DMP_PACKET_SIZE+2];
+    let mut fifo = [0; FIFO_SIZE];
     i2c.write_read(address, &[116], &mut fifo)?;
     Ok(fifo)
 }
@@ -205,6 +207,12 @@ impl MAPPData {
             out[i+1] = elemb[1];
             i+= 2;
         }
+    }
+
+    pub(crate) fn to_bytes(&self) -> [u8; MPU6050_DATA_SIZE] {
+        let mut buf = [0u8; MPU6050_DATA_SIZE];
+        self.to_byte_array(&mut buf, 0);
+        buf
     }
 
     pub(crate) fn q_to_float(&self) -> (f32, f32, f32, f32) {
